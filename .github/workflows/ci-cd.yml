@@ -1,0 +1,117 @@
+name: CI/CD Pipeline for Brent Oil Price Analysis
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r src/backend/requirements.txt
+          pip install pytest pytest-cov flake8
+
+      - name: Run flake8 linting
+        run: |
+          flake8 src/analysis src/backend --max-line-length=88 --extend-ignore=E203
+
+      - name: Run Python tests
+        run: |
+          pytest src/analysis/tests src/backend/tests --cov=src --cov-report=xml
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install frontend dependencies
+        run: |
+          cd src/frontend/oil-price-dashboard
+          npm install
+
+      - name: Run ESLint
+        run: |
+          cd src/frontend/oil-price-dashboard
+          npx eslint src --ext .js,.jsx
+
+      - name: Run React tests
+        run: |
+          cd src/frontend/oil-price-dashboard
+          npm test -- --coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  deploy-backend:
+    needs: ci
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/brent-oil-backend:latest
+
+      - name: Deploy to Render
+        uses: JuanBindez/pymaterial@v1
+        with:
+          python-version: '3.9'
+          app-dir: 'src/backend'
+          app-file: 'app.py'
+          render-service-id: ${{ secrets.RENDER_SERVICE_ID }}
+          render-api-key: ${{ secrets.RENDER_API_KEY }}
+
+  deploy-frontend:
+    needs: ci
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy React to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: ./src/frontend/oil-price-dashboard
